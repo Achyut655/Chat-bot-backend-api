@@ -1,5 +1,4 @@
-"""
-Financial Chatbot Microservice with Groq
+"""Financial Chatbot Microservice with Groq
 ----------------------------------------
 A lightweight Flask API for a financial chatbot that uses Groq's LLM capabilities.
 Enhanced with monthly category-wise data analysis.
@@ -27,9 +26,7 @@ CORS(app)
 # Configure CORS with specific settings
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5173", 
-                   "https://wealthverse.site", 
-                   "https://www.wealthverse.site"],
+        "origins": ["http://localhost:5173", "https://your-production-domain.com"],
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
