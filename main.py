@@ -2,6 +2,7 @@
 Financial Chatbot Microservice with Groq
 ----------------------------------------
 A lightweight Flask API for a financial chatbot that uses Groq's LLM capabilities.
+Enhanced with monthly category-wise data analysis.
 """
 
 from flask import Flask, request, jsonify
@@ -10,13 +11,11 @@ from dotenv import load_dotenv
 import os
 import datetime
 import json
-# import mysql.connector
 import pymysql
 
 from groq import Groq
 import uuid
 from decimal import Decimal
-import datetime
 import awsgi
 
 # Load environment variables
@@ -24,8 +23,6 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
-
-# from flask_cors import CORS
 
 # Configure CORS with specific settings
 CORS(app, resources={
@@ -51,7 +48,6 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 # Create necessary tables for chat functionality
 def setup_chat_schema():
     conn = pymysql.connect(**DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
-
     cursor = conn.cursor()
     
     # Create chats table
@@ -94,9 +90,7 @@ def initialize_db():
 
 # Helper functions for database operations
 def execute_query(query, params=None, fetchone=False):
-    # conn = mysql.connector.connect(**DB_CONFIG)
     conn = pymysql.connect(**DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
-
     cursor = conn.cursor()
     cursor.execute(query, params or ())
     
@@ -135,10 +129,137 @@ def fetch_user_data(user_id):
         (user_id,)
     )
     
+    # Get monthly category summaries for trends and patterns
+    # Fetch data from the last 6 months for analysis
+    current_date = datetime.datetime.now()
+    current_month_year = current_date.strftime('%Y-%m')
+    
+    # Get current month for detailed analysis
+    current_month_data = execute_query(
+        """
+        SELECT c.name as category_name, mcs.total_amount, mcs.total_emission
+        FROM monthly_category_summaries mcs
+        JOIN categories c ON mcs.category_id = c.id
+        WHERE mcs.user_id = %s AND mcs.month_year = %s
+        ORDER BY mcs.total_amount DESC
+        """,
+        (user_id, current_month_year)
+    )
+    
+    # Get previous month for comparison
+    prev_month_date = current_date.replace(day=1) - datetime.timedelta(days=1)
+    prev_month_year = prev_month_date.strftime('%Y-%m')
+    
+    # Get previous month data
+    prev_month_data = execute_query(
+        """
+        SELECT c.name as category_name, mcs.total_amount
+        FROM monthly_category_summaries mcs
+        JOIN categories c ON mcs.category_id = c.id
+        WHERE mcs.user_id = %s AND mcs.month_year = %s
+        """,
+        (user_id, prev_month_year)
+    )
+    
+    # Get historical monthly data (6 months)
+    monthly_summaries = execute_query(
+        """
+        SELECT mcs.month_year, c.name as category_name, mcs.total_amount, mcs.total_emission
+        FROM monthly_category_summaries mcs
+        JOIN categories c ON mcs.category_id = c.id
+        WHERE mcs.user_id = %s
+        ORDER BY mcs.month_year DESC
+        LIMIT 30
+        """,
+        (user_id,)
+    )
+    
+    # Organize monthly data by month for easier analysis
+    monthly_data = {}
+    for summary in monthly_summaries:
+        month = summary['month_year']
+        if month not in monthly_data:
+            monthly_data[month] = []
+        monthly_data[month].append({
+            'category': summary['category_name'],
+            'amount': summary['total_amount'],
+            'emission': summary['total_emission']
+        })
+    
+    # Calculate month-over-month changes for spending categories
+    current_month_insights = []
+    prev_month_totals = {item['category_name']: float(item['total_amount']) for item in prev_month_data}
+    
+    # Calculate current month spending and changes
+    total_current_spending = 0
+    total_current_emission = 0
+    
+    for category in current_month_data:
+        category_name = category['category_name']
+        amount = float(category['total_amount'])
+        emission = float(category['total_emission'])
+        
+        total_current_spending += amount
+        total_current_emission += emission
+        
+        change = 0
+        percent_change = 0
+        
+        if category_name in prev_month_totals:
+            prev_amount = prev_month_totals[category_name]
+            change = amount - prev_amount
+            percent_change = (change / prev_amount) * 100 if prev_amount != 0 else 0
+        
+        current_month_insights.append({
+            'category': category_name,
+            'amount': amount,
+            'emission': emission,
+            'change': change,
+            'percent_change': round(percent_change, 2)
+        })
+    
+    # Sort categories by biggest changes (both positive and negative)
+    current_month_insights.sort(key=lambda x: abs(x['change']), reverse=True)
+    
+    # Calculate longer-term trends (past 6 months)
+    months = sorted(monthly_data.keys())
+    trend_analysis = []
+    
+    if len(months) > 1:
+        for i in range(1, len(months)):
+            current_month = months[i]
+            prev_month = months[i-1]
+            
+            # Create lookup dictionaries for current and previous month
+            current_data = {item['category']: item['amount'] for item in monthly_data[current_month]}
+            prev_data = {item['category']: item['amount'] for item in monthly_data[prev_month]}
+            
+            # Calculate changes for categories present in both months
+            for category in set(current_data.keys()) & set(prev_data.keys()):
+                change = float(current_data[category]) - float(prev_data[category])
+                percent_change = (change / float(prev_data[category])) * 100 if float(prev_data[category]) != 0 else 0
+                
+                trend_analysis.append({
+                    'from_month': prev_month,
+                    'to_month': current_month,
+                    'category': category,
+                    'change': change,
+                    'percent_change': round(percent_change, 2)
+                })
+    
     # Format data for context
     context = {
         "recent_transactions": transactions,
-        "category_spending": categories
+        "category_spending": categories,
+        "monthly_data": monthly_data,
+        "current_month": {
+            "month_year": current_month_year,
+            "total_spending": total_current_spending,
+            "total_emission": total_current_emission,
+            "category_insights": current_month_insights
+        },
+        "previous_month": prev_month_year,
+        "spending_trends": trend_analysis
     }
     
     return context
@@ -221,7 +342,6 @@ def send_message(chat_id):
     
     # Get user financial data for context
     user_data = fetch_user_data(user_id)
-    # print(f"User data: {user_data}")
 
     # Convert Decimal objects to float for JSON serialization
     def convert_decimals(obj):
@@ -235,15 +355,34 @@ def send_message(chat_id):
 
     # Convert any Decimals in user_data to floats
     user_data = convert_decimals(user_data)
-    print(f"Converted user data: {user_data}")
+    print(f"Converted user data: {json.dumps(user_data, indent=2)}")
 
     # Format messages for Groq
     formatted_messages = [
         {"role": "system", "content": f"""You are a helpful financial assistant for a personal finance tracking application.
         You have access to the user's financial data and can answer questions about their spending, budget, and carbon footprint.
-        Current user data: {json.dumps(user_data)}
         
-        Be helpful, concise, and focus on providing actionable financial insights."""}
+        Current user data includes:
+        1. Recent transactions (last 20 transactions with amount, merchant, date, and carbon emission)
+        2. Overall category-wise spending totals
+        3. Monthly spending breakdowns by category (organized by month)
+        4. Current month detailed analysis with total spending, emissions, and comparison to previous month
+        5. Month-over-month spending trend analysis for each category
+        
+        User financial data: {json.dumps(user_data)}
+        
+        Be helpful, concise, and focus on providing actionable financial insights. When the user asks about:
+        - Monthly spending: Use the current_month data and monthly_data to provide detailed insights
+        - Spending trends: Highlight significant increases/decreases from the current_month.category_insights
+        - Carbon emissions: Include data about the user's carbon footprint when relevant
+        - Category analysis: Compare spending across different categories and months
+        - When suggesting improvements, base them on actual spending patterns visible in the data
+        
+        If the user asks about a specific month, check if that month exists in the monthly_data keys.
+        If the user asks for spending in a specific category, reference both the overall category_spending and the monthly breakdown.
+        
+        Always provide data-backed insights tailored to this specific user's financial behavior.
+        Format currency values appropriately and round percentages to 1-2 decimal places."""}
     ]
     
     for msg in messages:
@@ -280,7 +419,6 @@ def send_message(chat_id):
         "message_id": assistant_message_id,
         "content": assistant_response
     })
-
 
 @app.route('/api/chats/<chat_id>/end', methods=['POST'])
 def end_chat(chat_id):
@@ -358,9 +496,10 @@ def get_chat_messages(chat_id):
         "messages": messages
     })
 
+
+
 def lambda_handler(event, context):
     return awsgi.response(app, event, context)
-
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
