@@ -25,6 +25,17 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
+# from flask_cors import CORS
+
+# Configure CORS with specific settings
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["http://localhost:5173", "https://your-production-domain.com"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
+
 # Database configuration
 DB_CONFIG = {
     'host': os.environ.get('DB_HOST', 'localhost'),
