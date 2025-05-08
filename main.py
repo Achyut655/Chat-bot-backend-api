@@ -27,7 +27,9 @@ CORS(app)
 # Configure CORS with specific settings
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5173", "https://your-production-domain.com"],
+        "origins": ["http://localhost:5173", 
+                   "https://wealthverse.site", 
+                   "https://www.wealthverse.site"],
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
